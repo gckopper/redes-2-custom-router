@@ -26,7 +26,7 @@ def get_addrs(ndb: NDB) -> [RouterInterface]:
     return result
 
 
-def broadcast(ip: str, msg: str):
+def broadcast(ip: str, msg: bytes):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     # using port 0 for auto port
@@ -36,12 +36,12 @@ def broadcast(ip: str, msg: str):
     sock.close()
 
 def main():
-    s=socket(AF_INET, SOCK_DGRAM)
-    s.bind('', 8888)
+    s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind(('', 8888))
     with NDB() as ndb:
         addrs = get_addrs(ndb)
         for addr in addrs:
-            broadcast(addr.broadcast_ip, addr.ip)
+            broadcast(addr.ip, b'banana')
         while(True):
             msg = s.recvfrom(1024)
             print(msg)
