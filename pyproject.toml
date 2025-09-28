@@ -1,0 +1,10 @@
+[project]
+name = "trabalho-1"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "jedi-language-server>=0.45.1",
+    "pyroute2>=0.9.4",
+]
