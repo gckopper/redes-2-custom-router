@@ -1,9 +1,7 @@
-from pyroute2 import IPRoute, NDB
-import pprint
+from pyroute2 import NDB
 import socket
 import ipaddress
-
-routes = []
+from ping3 import ping
 
 class Route:
     network: ipaddress.IPv4Network
@@ -86,33 +84,47 @@ def broadcast_networks(addr, addrs):
             continue
         broadcast(addr.ip, addr.network.broadcast_address.compressed, routerInterface.to_route().packed())
 
-def spread_the_word(ndb):
-    addrs = get_addrs(ndb)
+def spread_the_word(ndb, addrs):
     for addr in addrs:
         broadcast_networks(addr, addrs)
+
+def calc_latency(ip: ipaddress.IPv4Address):
+    return ping(ip.compressed, unit='ms')
 
 def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     sock.bind(('', 8888))
+    routes = {}
+    neighbors = {}
     with NDB() as ndb:
-        spread_the_word(ndb)
         while(True):
+            """
+            missing the interval checks
+            """
+            addrs = get_addrs(ndb)
+            for addr in addrs:
+                neighbors[addr.network.with_prefixlen] = True
+            spread_the_word(ndb, addrs)
             msg = sock.recvfrom(1024)
             route = Route(msg)
-            try:
-                with ndb.routes[route.network.with_prefixlen] as route:
-                    if route['gateway'] == None:
-                        continue
-                    """
-                    update route
-                    """
-            except KeyError:
-                """
-                add route
-                """
-                pass
+            if neighbors[route.network.with_prefixlen]:
+                continue
+            route.latency += calc_latency(route.gateway)
+            old_route = routes[route.network.with_prefixlen]
+            if old_route == None:
+                ndb.routes.create(
+                        dst=route.network.with_prefixlen,
+                        gateway=route.gateway.compressed
+                ).commit()
+                routes[route.network.with_prefixlen] = route
+                continue
+            if old_route.latency < route.latency:
+                continue
+            routes[route.network.with_prefixlen] = route
+            with ndb.routes[route.network.with_prefixlen] as old_table_route:
+                old_table_route.set('gateway', route.gateway.compressed)
 
 
 if __name__ == "__main__":
