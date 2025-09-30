@@ -2,6 +2,7 @@ from pyroute2 import NDB
 import socket
 import ipaddress
 from ping3 import ping
+from time import time
 
 class Route:
     network: ipaddress.IPv4Network
@@ -95,19 +96,28 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock.settimeout(1)
     sock.bind(('', 8888))
     routes = {}
     neighbors = {}
+    last_update = 0
+    addr = 0
     with NDB() as ndb:
         while(True):
             """
             missing the interval checks
             """
-            addrs = get_addrs(ndb)
-            for addr in addrs:
-                neighbors[addr.network.with_prefixlen] = True
-            spread_the_word(ndb, addrs)
-            msg = sock.recvfrom(1024)
+            new_time = time()
+            if (new_time - last_update) > 30:
+                last_update = new_time
+                addrs = get_addrs(ndb)
+                for addr in addrs:
+                    neighbors[addr.network.with_prefixlen] = True
+                spread_the_word(ndb, addrs)
+            try:
+                msg = sock.recvfrom(1024)
+            except:
+                pass
             route = Route(msg)
             if neighbors[route.network.with_prefixlen]:
                 continue
