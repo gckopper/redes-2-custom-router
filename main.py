@@ -69,7 +69,6 @@ def get_addrs(ndb: NDB) -> [RouterInterface]:
 
 
 def broadcast(ip: ipaddress.IPv4Address, broadcast_ip: str, msg: bytes):
-    print(ip, broadcast_ip)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
@@ -92,17 +91,61 @@ def spread_the_word(ndb, addrs):
 def calc_latency(ip: ipaddress.IPv4Address):
     return ping(ip.compressed, unit='ms')
 
-def main():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-    sock.settimeout(1)
-    sock.bind(('', 8888))
+class Consumer:
     routes = {}
+    sock: socket.socket
+    ndb: NDB
+    def __init__(self, ndb: NDB):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        self.sock.setblocking(0)
+        self.sock.bind(('', 8888))
+        self.ndb = ndb
+    def recv_route(self) -> Route | None:
+        try:
+            msg = self.sock.recvfrom(1024)
+        except socket.error as e:
+            if e.errno != socket.errno.EAGAIN and e.errno != socket.errno.EWOULDBLOCK:
+                print("Socket erro", e)
+            return None
+        return Route(msg)
+    def process_route(self, route: Route, neighbors):
+        if neighbors[route.network.with_prefixlen]:
+            return
+        route.latency += calc_latency(route.gateway)
+        old_route = self.routes[route.network.with_prefixlen]
+        if old_route == None:
+            self.ndb.routes.create(
+                    dst=route.network.with_prefixlen,
+                    gateway=route.gateway.compressed
+            ).commit()
+            self.routes[route.network.with_prefixlen] = route
+            return
+        if old_route.latency < route.latency:
+            return
+        self.routes[route.network.with_prefixlen] = route
+        with self.ndb.routes[route.network.with_prefixlen] as old_table_route:
+            old_table_route.set('gateway', route.gateway.compressed)
+
+class Publisher:
     neighbors = {}
+    ndb: NDB
+    def __init__(self, ndb: NDB):
+        self.ndb = ndb
+    def publish(self):
+        addrs = get_addrs(self.ndb)
+        for addr in addrs:
+            self.neighbors[addr.network.with_prefixlen] = True
+        spread_the_word(self.ndb, addrs)
+    def get_neighbors(self):
+        return self.neighbors
+
+def main():
     last_update = 0
-    addr = 0
     with NDB() as ndb:
+        publisher = Publisher(ndb)
+        consumer = Consumer(ndb)
         while(True):
             """
             missing the interval checks
@@ -110,32 +153,11 @@ def main():
             new_time = time()
             if (new_time - last_update) > 30:
                 last_update = new_time
-                addrs = get_addrs(ndb)
-                for addr in addrs:
-                    neighbors[addr.network.with_prefixlen] = True
-                spread_the_word(ndb, addrs)
-            try:
-                msg = sock.recvfrom(1024)
-            except:
-                pass
-            route = Route(msg)
-            if neighbors[route.network.with_prefixlen]:
+                publisher.publish()
+            route = consumer.recv_route()
+            if route == None:
                 continue
-            route.latency += calc_latency(route.gateway)
-            old_route = routes[route.network.with_prefixlen]
-            if old_route == None:
-                ndb.routes.create(
-                        dst=route.network.with_prefixlen,
-                        gateway=route.gateway.compressed
-                ).commit()
-                routes[route.network.with_prefixlen] = route
-                continue
-            if old_route.latency < route.latency:
-                continue
-            routes[route.network.with_prefixlen] = route
-            with ndb.routes[route.network.with_prefixlen] as old_table_route:
-                old_table_route.set('gateway', route.gateway.compressed)
-
+            consumer.process_route(route, publisher.neighbors)
 
 if __name__ == "__main__":
     main()
