@@ -50,6 +50,8 @@ class RouterInterface:
         self.label = label
     def to_route(self) -> Route:
         return Route(self.network)
+    def __str__(self):
+        return "RouterInterface(" + self.label + ", " + self.ip.compressed + ", " + self.network.with_prefixlen + ")"
 
 
 def get_addrs(ndb: NDB) -> [RouterInterface]:
@@ -57,9 +59,9 @@ def get_addrs(ndb: NDB) -> [RouterInterface]:
     for record in ndb.addresses.dump():
         values = record._values
         ip = ipaddress.ip_address(values[7])
-        if type(ip) != ipaddress.IPv4Address or ip.is_loopback or  values[10] == None:
+        if type(ip) != ipaddress.IPv4Address or ip.is_loopback:
             """
-            Ignora interfaces de loopback, interfaces sem endereço de broadcast e tudo que não é ipv4 
+            Ignora interfaces de loopback e tudo que não é ipv4 
             """
             continue
         network = ipaddress.ip_network((ip.compressed, values[3]), strict=False)
@@ -87,6 +89,9 @@ def broadcast_networks(addr, addrs):
 
 def spread_the_word(ndb, addrs):
     for addr in addrs:
+        print("broadcasting about ", end='')
+        [print(a, end=' ') for a in addrs]
+        print("to", addr)
         broadcast_networks(addr, addrs)
 
 def calc_latency(ip: ipaddress.IPv4Address):
@@ -105,14 +110,16 @@ class Consumer:
         self.ndb = ndb
     def recv_route(self) -> Route | None:
         try:
-            msg = self.sock.recvfrom(1024)
+            msg = self.sock.recvfrom(13)
         except socket.error as e:
             if e.errno != socket.errno.EAGAIN and e.errno != socket.errno.EWOULDBLOCK:
                 print("Socket erro", e)
             return None
         return Route(msg)
     def process_route(self, route: Route, neighbors):
+        print("processing route", route.network.with_prefixlen, route)
         if neighbors[route.network.with_prefixlen]:
+            print("its a neighbor")
             return
         route.latency += calc_latency(route.gateway)
         old_route = self.routes[route.network.with_prefixlen]
@@ -121,12 +128,15 @@ class Consumer:
                     dst=route.network.with_prefixlen,
                     gateway=route.gateway.compressed
             ).commit()
+            print("added route")
             self.routes[route.network.with_prefixlen] = route
             return
         if old_route.latency < route.latency:
+            print("latency too high")
             return
         self.routes[route.network.with_prefixlen] = route
         with self.ndb.routes[route.network.with_prefixlen] as old_table_route:
+            print("changing gateways")
             old_table_route.set('gateway', route.gateway.compressed)
 
 class Publisher:
@@ -145,7 +155,7 @@ class Publisher:
 def main():
     last_update = 0
     if os.path.exists('/init.sh'):
-        system('/init.sh')
+        os.system('/init.sh')
     with NDB() as ndb:
         publisher = Publisher(ndb)
         consumer = Consumer(ndb)
