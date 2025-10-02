@@ -1,4 +1,5 @@
 from pyroute2 import NDB
+import os
 import socket
 import ipaddress
 from ping3 import ping
@@ -143,6 +144,8 @@ class Publisher:
 
 def main():
     last_update = 0
+    if os.path.exists('/init.sh'):
+        system('/init.sh')
     with NDB() as ndb:
         publisher = Publisher(ndb)
         consumer = Consumer(ndb)
